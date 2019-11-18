@@ -3,11 +3,9 @@
 #include <cmath>
 #include <new>
 #include <random>
-#include <vector>
 #include <iostream>
 #include <Eigen/Dense>
 
-template <std::size_t N>
 class NeuralNetwork
 {
 private:
@@ -16,25 +14,28 @@ private:
   // 出力層のユニット数
   // const std::size_t output_units_length_ = 1;
   // 中間層のユニット数
-  const std::size_t middle_units_length_ = N;
+  std::size_t middle_units_length_;
   // weights_[k](j, i): 中間層(k-1)のi番目のニューロンと
   // 中間層kのj番目のニューロンをつなぐ重み。
   // ただし、-1番目の層を入力層、1番目の層を出力層とする。
   std::array<Eigen::MatrixXd, 2> weights_;
-  // 学習率
-  double learning_rate_ = 0.01;
+  // 乱数生成用
+  std::random_device rnd;
   // 活性化関数
   double activation_function(double x);
+  // 1行目だけ定数関数となっている活性化関数
   Eigen::MatrixXd activation_function(Eigen::MatrixXd x);
   // 活性化関数の導関数
   double derivative_activation_function(double x);
+  // 1行目だけ定数関数となっている活性化関数の導関数
   Eigen::MatrixXd derivative_activation_function(Eigen::MatrixXd x);
 
-public:
-  // 慣性項の寄与率
-  double inertia_weight = 0;
 
-  NeuralNetwork();
+public:
+  // 学習率
+  double learning_rate = 0.01;
+
+  NeuralNetwork(int middle_units_length);
   // 学習
   void fit(double obj_value, std::array<double, 2> exp_values);
   // 予想
@@ -43,65 +44,71 @@ public:
   void show_weights();
 };
 
-template<std::size_t N>
-NeuralNetwork<N>::NeuralNetwork()
+NeuralNetwork::NeuralNetwork(int middle_units_length)
+  : middle_units_length_(middle_units_length+1)
 {
   // 必要な領域の確保
   new(&weights_[0]) Eigen::MatrixXd(middle_units_length_, input_units_length_);
   new(&weights_[1]) Eigen::MatrixXd(1, middle_units_length_);
 
   // 重みの初期化
-  std::mt19937 mt((unsigned)time(NULL));
+  std::mt19937 mt(rnd());
   for (int k = 0; k < 2; ++k) {
     for (int j = 0; j < weights_[k].rows(); ++j) {
       for (int i = 0; i < weights_[k].cols(); ++i) {
-        weights_[k](j, i) = (double)mt() / (((long long)1<<32)-1) * 2/weights_[k].cols()
-          - 1.0/weights_[k].cols();
+        double max_abs = std::sqrt(weights_[k].cols());
+        weights_[k](j, i) = (double)mt() / (((long long)1<<32)-1) * 2.0/max_abs
+          - 1.0/max_abs;
       }
     }
   }
 }
 
-template<std::size_t N>
-double NeuralNetwork<N>::activation_function(double x)
+double NeuralNetwork::activation_function(double x)
 {
   // ReLU
   return (x<=0) ? 0 : x;
   // シグモイド関数
-  // return 1.0 / (1.0 + std::exp(-4*x));
+  // double beta = 1;
+  // return 1.0 / (1.0 + std::exp(-beta*x));
 }
 
-template<std::size_t N>
-Eigen::MatrixXd NeuralNetwork<N>::activation_function(Eigen::MatrixXd x)
+Eigen::MatrixXd NeuralNetwork::activation_function(Eigen::MatrixXd x)
 {
   for (int j = 0; j < x.rows(); ++j) {
     for (int i = 0; i < x.cols(); ++i) {
-      x(j, i) = activation_function(x(j, i));
+      if (j == 0) {
+        x(j, i) = 1;
+      } else {
+        x(j, i) = activation_function(x(j, i));
+      }
     }
   }
   return x;
 }
 
-template<std::size_t N>
-double NeuralNetwork<N>::derivative_activation_function(double x)
+double NeuralNetwork::derivative_activation_function(double x)
 {
   return (x<0) ? 0 : 1;
-  // return 4*std::exp(-4*x) / std::pow((1.0 + std::exp(-4*x)), 2.0);
+  // double beta = 1;
+  // return beta*std::exp(-beta*x) / std::pow((1.0 + std::exp(-beta*x)), 2.0);
 }
 
-template<std::size_t N>
-Eigen::MatrixXd NeuralNetwork<N>::derivative_activation_function(Eigen::MatrixXd x)
+Eigen::MatrixXd NeuralNetwork::derivative_activation_function(Eigen::MatrixXd x)
 {
   for (int j = 0; j < x.rows(); ++j) {
     for (int i = 0; i < x.cols(); ++i) {
-      x(j, i) = derivative_activation_function(x(j, i));
+      if (j == 0) {
+        x(j, i) = 0;
+      } else {
+        x(j, i) = derivative_activation_function(x(j, i));
+      }
     }
   }
   return x;
 }
 
-template<std::size_t N>
-void NeuralNetwork<N>::fit(double obj_value, std::array<double, 2> exp_values)
+void NeuralNetwork::fit(double obj_value, std::array<double, 2> exp_values)
 {
   std::array<Eigen::MatrixXd, 3> inputs = {
                                            Eigen::MatrixXd(input_units_length_, 1),
@@ -120,15 +127,14 @@ void NeuralNetwork<N>::fit(double obj_value, std::array<double, 2> exp_values)
   Eigen::MatrixXd teacher(1, 1);
   teacher(0, 0) = obj_value;
   std::array<Eigen::MatrixXd, 2> delta;
-  delta[1] = (teacher - activation_function(inputs[2]));
+  delta[1] = (teacher - inputs[2]);
   delta[0] = (weights_[1].transpose() * delta[1]).array()
     * derivative_activation_function(inputs[1]).array();
-  weights_[1] += learning_rate_ * delta[1] * activation_function(inputs[1]).transpose();
-  weights_[0] += learning_rate_ * delta[0] * inputs[0].transpose();
+  weights_[1] += learning_rate * delta[1] * activation_function(inputs[1]).transpose();
+  weights_[0] += learning_rate * delta[0] * inputs[0].transpose();
 }
 
-template<std::size_t N>
-double NeuralNetwork<N>::predict(std::array<double, 2> exp_values)
+double NeuralNetwork::predict(std::array<double, 2> exp_values)
 {
   Eigen::MatrixXd input(exp_values.size() + 1, 1);
   for (int i = 0; i <= exp_values.size(); ++i) {
@@ -137,17 +143,10 @@ double NeuralNetwork<N>::predict(std::array<double, 2> exp_values)
   return (weights_[1] * activation_function(weights_[0] * input))(0, 0);
 }
 
-template<std::size_t N>
-void NeuralNetwork<N>::show_weights()
+void NeuralNetwork::show_weights()
 {
   for (int k = 0; k < 2; ++k) {
     printf("weights between layer %d - %d:\n", k-1, k);
-    for (int j = 0; j < weights_[k].rows(); ++j) {
-      for (int i = 0; i < weights_[k].cols(); ++i) {
-        printf("%s%7.3f", (i==0)?"":" ", weights_[k](j, i));
-      }
-      puts("");
-    }
-    puts("");
+    std::cout << weights_[k] << std::endl;
   }
 }
